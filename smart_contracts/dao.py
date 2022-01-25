@@ -1,14 +1,16 @@
 import smartpy as sp
 
-Addresses = sp.import_script_from_url("file:test-helpers/addresses.py")
-Errors = sp.import_script_from_url("file:common/errors.py")
-HistoricalOutcomes = sp.import_script_from_url("file:common/historical-outcomes.py")
-Poll = sp.import_script_from_url("file:common/poll.py")
-PollOutcomes = sp.import_script_from_url("file:common/poll-outcomes.py")
-Proposal = sp.import_script_from_url("file:common/proposal.py")
-QuorumCap = sp.import_script_from_url("file:common/quorum-cap.py")
-VoteRecord = sp.import_script_from_url("file:common/vote-record.py")
-VoteValue = sp.import_script_from_url("file:common/vote-value.py")
+FA2_test = sp.io.import_script_from_url("file:test-helpers/fa2.py")
+Escrow = sp.io.import_script_from_url("file:escrow.py")
+Addresses = sp.io.import_script_from_url("file:test-helpers/addresses.py")
+Errors = sp.io.import_script_from_url("file:common/errors.py")
+HistoricalOutcomes = sp.io.import_script_from_url("file:common/historical-outcomes.py")
+Poll = sp.io.import_script_from_url("file:common/poll.py")
+PollOutcomes = sp.io.import_script_from_url("file:common/poll-outcomes.py")
+Proposal = sp.io.import_script_from_url("file:common/proposal.py")
+QuorumCap = sp.io.import_script_from_url("file:common/quorum-cap.py")
+VoteRecord = sp.io.import_script_from_url("file:common/vote-record.py")
+VoteValue = sp.io.import_script_from_url("file:common/vote-value.py")
 
 ################################################################
 ################################################################
@@ -130,13 +132,14 @@ class DaoContract(sp.Contract):
     poll = sp.none,
     timelockItem = sp.none,
     tokenContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
+    escrowContractAddress = Addresses.ESCROW_CONTRACT_ADDRESS,
     quorum = sp.nat(100),
     communityFundAddress = Addresses.COMMUNITY_FUND_ADDRESS,
     state = STATE_MACHINE_IDLE,
     votingState = sp.none,
     outcomes = sp.big_map(l = {}, tkey = sp.TNat, tvalue = HistoricalOutcomes.HISTORICAL_OUTCOME_TYPE),
   ):
-    metadata_data = sp.bytes_of_string('{ "name": "Kolibri Governance DAO", "authors": ["Hover Labs <hello@hover.engineering>"], "homepage":  "https://kolibri.finance" }')
+    metadata_data = sp.utils.bytes_of_string('{ "name": "SalsaDAO Governance", "authors": ["Genius Contracts"], "homepage":  "https://salsadao.xyz" }')
 
     metadata = sp.big_map(
       l = {
@@ -150,6 +153,7 @@ class DaoContract(sp.Contract):
     self.init_type(
       sp.TRecord(
         tokenContractAddress = sp.TAddress,
+        escrowContractAddress = sp.TAddress,
         communityFundAddress = sp.TAddress,
         governanceParameters = GOVERNANCE_PARAMETERS_TYPE,
         quorum = sp.TNat,
@@ -166,6 +170,9 @@ class DaoContract(sp.Contract):
     self.init(
       # The address of the governance token contract.
       tokenContractAddress = tokenContractAddress,
+
+      # The address of the governance escrow contract.
+      escrowContractAddress = escrowContractAddress,
 
       # The address of the community fund. 
       communityFundAddress = communityFundAddress,
@@ -204,17 +211,49 @@ class DaoContract(sp.Contract):
     sp.verify(~self.data.poll.is_some(), Errors.ERROR_POLL_UNDERWAY)
 
     # Escrow tokens.
-    tokenContractHandle = sp.contract(
-      sp.TRecord(from_ = sp.TAddress, to_ = sp.TAddress, value = sp.TNat).layout(("from_ as from", ("to_ as to", "value"))),
+    # tokenContractHandle = sp.contract(
+    #   sp.TRecord(from_ = sp.TAddress, to_ = sp.TAddress, value = sp.TNat).layout(("from_ as from", ("to_ as to", "value"))),
+    #   self.data.tokenContractAddress,
+    #   "transfer"
+    # ).open_some()
+    # tokenContractArg = sp.record(
+    #   from_ = sp.sender, 
+    #   to_ = sp.self_address, 
+    #   value = self.data.governanceParameters.escrowAmount
+    # )
+    # sp.transfer(tokenContractArg, sp.mutez(0), tokenContractHandle)
+
+    # CHANGED to FA2 sig
+    handle = sp.contract(
+      sp.TList(
+        sp.TRecord(
+          from_ = sp.TAddress,
+          txs = sp.TList(
+            sp.TRecord(
+              amount = sp.TNat,
+              to_ = sp.TAddress, 
+              token_id = sp.TNat,
+            ).layout(("to_", ("token_id", "amount")))
+          )
+        ).layout(("from_", "txs"))
+      ),
       self.data.tokenContractAddress,
       "transfer"
     ).open_some()
-    tokenContractArg = sp.record(
-      from_ = sp.sender, 
-      to_ = sp.self_address, 
-      value = self.data.governanceParameters.escrowAmount
-    )
-    sp.transfer(tokenContractArg, sp.mutez(0), tokenContractHandle)
+
+    arg = [
+      sp.record(
+        from_ = sp.sender,
+        txs = [
+          sp.record(
+            amount = self.data.governanceParameters.escrowAmount,
+            to_ = sp.self_address,
+            token_id = sp.nat(0) # STATIC: set to sDAO token_id
+          )
+        ]
+      )
+    ]
+    sp.transfer(arg, sp.mutez(0), handle)
 
     # Create a new contract under vote.
     startBlock = sp.level + self.data.governanceParameters.voteDelayBlocks
@@ -265,17 +304,50 @@ class DaoContract(sp.Contract):
       escrowRecipient.value = self.data.communityFundAddress
     
     # Release escrow.
-    tokenContractHandle = sp.contract(
-      sp.TRecord(from_ = sp.TAddress, to_ = sp.TAddress, value = sp.TNat).layout(("from_ as from", ("to_ as to", "value"))),
+    # tokenContractHandle = sp.contract(
+    #   sp.TRecord(from_ = sp.TAddress, to_ = sp.TAddress, value = sp.TNat).layout(("from_ as from", ("to_ as to", "value"))),
+    #   self.data.tokenContractAddress,
+    #   "transfer"
+    # ).open_some()
+    # tokenContractArg = sp.record(
+    #   from_ = sp.self_address, 
+    #   to_ = escrowRecipient.value, 
+    #   value = self.data.governanceParameters.escrowAmount
+    # )
+    # sp.transfer(tokenContractArg, sp.mutez(0), tokenContractHandle)
+
+    # CHANGED to FA2 sig
+    # Transfer the tokens
+    handle = sp.contract(
+      sp.TList(
+        sp.TRecord(
+          from_ = sp.TAddress,
+          txs = sp.TList(
+            sp.TRecord(
+              amount = sp.TNat,
+              to_ = sp.TAddress, 
+              token_id = sp.TNat,
+            ).layout(("to_", ("token_id", "amount")))
+          )
+        ).layout(("from_", "txs"))
+      ),
       self.data.tokenContractAddress,
       "transfer"
     ).open_some()
-    tokenContractArg = sp.record(
-      from_ = sp.self_address, 
-      to_ = escrowRecipient.value, 
-      value = self.data.governanceParameters.escrowAmount
-    )
-    sp.transfer(tokenContractArg, sp.mutez(0), tokenContractHandle)
+
+    arg = [
+      sp.record(
+        from_ = sp.self_address,
+        txs = [
+          sp.record(
+            amount = self.data.governanceParameters.escrowAmount,
+            to_ = escrowRecipient.value,
+            token_id = sp.nat(0) # STATIC: set to sDAO token_id
+          )
+        ]
+      )
+    ]
+    sp.transfer(arg, sp.mutez(0), handle)
 
     # Transfer proposal to timelock and update outcome if it passed
     sp.if (poll.value.yayVotes >= yayVotesNeededForSuperMajority) & (poll.value.totalVotes >= self.data.quorum): 
@@ -357,7 +429,7 @@ class DaoContract(sp.Contract):
           )
         )
       ),
-      self.data.tokenContractAddress,
+      self.data.escrowContractAddress,
       "getPriorBalance"
     ).open_some()
     tokenContractArg = (
@@ -377,7 +449,7 @@ class DaoContract(sp.Contract):
     sp.verify(self.data.state == STATE_MACHINE_WAITING_FOR_BALANCE, Errors.ERROR_BAD_STATE)
 
     # Verify sender is the token contract.
-    sp.verify(sp.sender == self.data.tokenContractAddress, Errors.ERROR_NOT_TOKEN_CONTRACT)
+    sp.verify(sp.sender == self.data.escrowContractAddress, Errors.ERROR_NOT_TOKEN_CONTRACT)
 
     # Verify returned data is the requested data.
     savedState = self.data.votingState.open_some()
@@ -501,9 +573,9 @@ class DaoContract(sp.Contract):
 # Only run tests if this file is main.
 if __name__ == "__main__":
 
-  FakeToken = sp.import_script_from_url("file:test-helpers/fake-token.py")
-  Store = sp.import_script_from_url("file:test-helpers/store.py")
-  Token = sp.import_script_from_url("file:token.py")
+  FakeToken = sp.io.import_script_from_url("file:test-helpers/fake-token.py")
+  Store = sp.io.import_script_from_url("file:test-helpers/store.py")
+  Token = sp.io.import_script_from_url("file:token.py")
 
   ################################################################
   # propose
@@ -514,10 +586,34 @@ if __name__ == "__main__":
     scenario = sp.test_scenario()
 
     # GIVEN a token contract
-    token = Token.FA12(
-      admin = Addresses.TOKEN_ADMIN_ADDRESS,
-    )
-    scenario += token
+    # token = Token.FA12(
+    #   admin = Addresses.TOKEN_ADMIN_ADDRESS,
+    # )
+    # scenario += token
+
+    admin = sp.test_account("Administrator")
+    alice = sp.test_account("Alice")
+    bob   = sp.test_account("Robert")
+
+    # Let's display the accounts:
+    test_sdao = FA2_test.FA2(config = FA2_test.FA2_config(single_asset = True),
+          metadata = sp.utils.metadata_of_url("https://example.com"),
+          admin = admin.address)
+    scenario += test_sdao
+
+    scenario.h2("Initial Minting")
+
+    scenario.p("The administrator mints 100")
+
+    tok0_md = FA2_test.FA2.make_metadata(
+      name = "test sdao",
+      decimals = 0,
+      symbol= "TK0" )
+
+    scenario += test_sdao.mint(address = alice.address,
+                      amount = 690000,
+                      metadata = tok0_md,
+                      token_id = 0).run(sender = admin)
     
     # AND some governance parameters
     escrowAmount = sp.nat(10)
@@ -541,29 +637,18 @@ if __name__ == "__main__":
 
     # AND a dao contract.
     dao = DaoContract(
-      tokenContractAddress = token.address,
+      tokenContractAddress = test_sdao.address,
       governanceParameters = governanceParameters,
     )
     scenario += dao
 
-    # AND an Alice has tokens
-    totalTokens = sp.nat(100)
-    scenario += token.mint(
-      sp.record(
-        address = Addresses.ALICE_ADDRESS,
-        value = totalTokens
-      )
-    ).run(
-      sender = Addresses.TOKEN_ADMIN_ADDRESS
-    )
-
-    # AND Alice has approved the DAO to spend the tokens.
-    scenario += token.approve(
-      spender = dao.address,
-      value = totalTokens
-    ).run(
-      sender = Addresses.ALICE_ADDRESS
-    )
+    scenario.p("Update Operators to DAO.")
+    scenario += test_sdao.update_operators([
+        sp.variant("add_operator", test_sdao.operator_param.make(
+            owner = alice.address,
+            operator = dao.address,
+            token_id = 0)),
+    ]).run(sender = alice)
 
     # AND a store value contract with the dao as the admin.
     storeContract = Store.StoreValueContract(value = 0, admin = dao.address)
@@ -589,7 +674,7 @@ if __name__ == "__main__":
     level = 1
 
     scenario += dao.propose(proposal).run(
-      sender = Addresses.ALICE_ADDRESS,
+      sender = alice.address,
       level = 1
     )
 
@@ -609,7 +694,7 @@ if __name__ == "__main__":
     scenario.verify(poll.totalVotes == 0)
 
     # AND alice is listed as the author.
-    scenario.verify(poll.author == Addresses.ALICE_ADDRESS)
+    scenario.verify(poll.author == alice.address)
 
     # AND the poll took the initial identifier
     scenario.verify(poll.id == sp.nat(0))
@@ -637,20 +722,49 @@ if __name__ == "__main__":
     scenario.verify(poll.quorumCap.upper == governanceParameters.quorumCap.upper)
 
     # AND the dao received the tokens in escrow.
-    scenario.verify(token.data.balances[dao.address] == escrowAmount)
+    scenario.verify(test_sdao.data.ledger[test_sdao.ledger_key.make(dao.address, 0)].balance == escrowAmount)
 
   @sp.add_test(name="propose - cannot propose if another poll is under vote")
   def test():
     scenario = sp.test_scenario()
 
+    escrowAmount = sp.nat(10)
     # GIVEN a token contract
-    token = Token.FA12(
-      admin = Addresses.TOKEN_ADMIN_ADDRESS,
-    )
-    scenario += token
+    admin = sp.test_account("Administrator")
+    alice = sp.test_account("Alice")
+    bob   = sp.test_account("Robert")
+
+    # Let's display the accounts:
+    test_sdao = FA2_test.FA2(config = FA2_test.FA2_config(single_asset = True),
+          metadata = sp.utils.metadata_of_url("https://example.com"),
+          admin = admin.address)
+    scenario += test_sdao
+
+    scenario.h2("Initial Minting")
+
+    scenario.p("The administrator mints 100")
+
+    tok0_md = FA2_test.FA2.make_metadata(
+      name = "test sdao",
+      decimals = 0,
+      symbol= "TK0" )
+
+    scenario += test_sdao.mint(address = alice.address,
+                      amount = 690000,
+                      metadata = tok0_md,
+                      token_id = 0).run(sender = admin)
+
+    scenario += test_sdao.transfer(
+    [
+        test_sdao.batch_transfer.item(from_ = alice.address,
+        txs = [
+          sp.record(to_ = bob.address,
+                    amount = 10000,
+                    token_id = 0)
+        ])
+    ]).run(sender = alice)
     
     # AND some governance parameters
-    escrowAmount = sp.nat(10)
     voteDelayBlocks = sp.nat(1)
     voteLengthBlocks = sp.nat(10)
     minYayVotesPercentForEscrowReturn = sp.nat(20)
@@ -671,43 +785,26 @@ if __name__ == "__main__":
 
     # AND a dao contract.
     dao = DaoContract(
-      tokenContractAddress = token.address,
+      tokenContractAddress = test_sdao.address,
       governanceParameters = governanceParameters,
     )
     scenario += dao
 
-    # AND an Alice and bob have tokens
-    numTokens = sp.nat(100)
-    scenario += token.mint(
-      sp.record(
-        address = Addresses.ALICE_ADDRESS,
-        value = numTokens
-      )
-    ).run(
-      sender = Addresses.TOKEN_ADMIN_ADDRESS
-    )
-    scenario += token.mint(
-      sp.record(
-        address = Addresses.BOB_ADDRESS,
-        value = numTokens
-      )
-    ).run(
-      sender = Addresses.TOKEN_ADMIN_ADDRESS
-    )
+    scenario.p("Update Operators to DAO.")
+    scenario += test_sdao.update_operators([
+        sp.variant("add_operator", test_sdao.operator_param.make(
+            owner = alice.address,
+            operator = dao.address,
+            token_id = 0)),
+    ]).run(sender = alice)
 
-    # AND Alice and Bob have approved the DAO to spend the tokens.
-    scenario += token.approve(
-      spender = dao.address,
-      value = numTokens
-    ).run(
-      sender = Addresses.ALICE_ADDRESS
-    )
-    scenario += token.approve(
-      spender = dao.address,
-      value = numTokens
-    ).run(
-      sender = Addresses.BOB_ADDRESS
-    )
+    scenario.p("Update Operators to DAO.")
+    scenario += test_sdao.update_operators([
+        sp.variant("add_operator", test_sdao.operator_param.make(
+            owner = bob.address,
+            operator = dao.address,
+            token_id = 0)),
+    ]).run(sender = bob)
 
     # AND a store value contract with the dao as the admin.
     storeContract = Store.StoreValueContract(value = sp.nat(0), admin = dao.address)
@@ -733,7 +830,7 @@ if __name__ == "__main__":
     level = 1
 
     scenario += dao.propose(proposal).run(
-      sender = Addresses.ALICE_ADDRESS,
+      sender = alice.address,
       level = 1
     )
 
@@ -758,7 +855,7 @@ if __name__ == "__main__":
 
     # THEN the call fails
     scenario += dao.propose(proposal).run(
-      sender = Addresses.BOB_ADDRESS,
+      sender = bob.address,
       level = 1,
       valid = False
     )
@@ -766,15 +863,35 @@ if __name__ == "__main__":
   @sp.add_test(name="propose - cannot propose if proposer does not have collateral")
   def test():
     scenario = sp.test_scenario()
+    escrowAmount = sp.nat(10)
 
     # GIVEN a token contract
-    token = Token.FA12(
-      admin = Addresses.TOKEN_ADMIN_ADDRESS,
-    )
-    scenario += token
+    admin = sp.test_account("Administrator")
+    alice = sp.test_account("Alice")
+    bob   = sp.test_account("Robert")
+
+    # Let's display the accounts:
+    test_sdao = FA2_test.FA2(config = FA2_test.FA2_config(single_asset = True),
+          metadata = sp.utils.metadata_of_url("https://example.com"),
+          admin = admin.address)
+    scenario += test_sdao
+
+    scenario.h2("Initial Minting")
+
+    scenario.p("The administrator mints 100")
+
+    tok0_md = FA2_test.FA2.make_metadata(
+      name = "test sdao",
+      decimals = 0,
+      symbol= "TK0" )
+
+    # AND an Alice has fewer tokens than the escrow amount
+    scenario += test_sdao.mint(address = alice.address,
+                      amount = sp.as_nat(escrowAmount - 1),
+                      metadata = tok0_md,
+                      token_id = 0).run(sender = admin)
     
     # AND some governance parameters
-    escrowAmount = sp.nat(10)
     voteDelayBlocks = sp.nat(1)
     voteLengthBlocks = sp.nat(10)
     minYayVotesPercentForEscrowReturn = sp.nat(20)
@@ -795,29 +912,18 @@ if __name__ == "__main__":
 
     # AND a dao contract.
     dao = DaoContract(
-      tokenContractAddress = token.address,
+      tokenContractAddress = test_sdao.address,
       governanceParameters = governanceParameters,
     )
     scenario += dao
 
-    # AND an Alice has fewer tokens than the escrow amount
-    totalTokens = sp.as_nat(escrowAmount - 1)
-    scenario += token.mint(
-      sp.record(
-        address = Addresses.ALICE_ADDRESS,
-        value = totalTokens
-      )
-    ).run(
-      sender = Addresses.TOKEN_ADMIN_ADDRESS
-    )
-
-    # AND Alice has approved the DAO to spend the tokens.
-    scenario += token.approve(
-      spender = dao.address,
-      value = totalTokens
-    ).run(
-      sender = Addresses.ALICE_ADDRESS
-    )
+    scenario.p("Update Operators to DAO.")
+    scenario += test_sdao.update_operators([
+        sp.variant("add_operator", test_sdao.operator_param.make(
+            owner = alice.address,
+            operator = dao.address,
+            token_id = 0)),
+    ]).run(sender = alice)
 
     # AND a store value contract with the dao as the admin.
     storeContract = Store.StoreValueContract(value = 0, admin = dao.address)
@@ -844,19 +950,20 @@ if __name__ == "__main__":
 
     # THEN the call fails.
     scenario += dao.propose(proposal).run(
-      sender = Addresses.ALICE_ADDRESS,
+      sender = alice.address,
       level = 1,
       valid = False
     )
 
-  ################################################################
-  # endVoting
-  ################################################################
+  # ################################################################
+  # # endVoting
+  # ################################################################
 
   @sp.add_test(name="endVoting - fails if no poll underway")
   def test():
     scenario = sp.test_scenario()
     
+    alice = sp.test_account("Alice")
     # Given some governance parameters
     escrowAmount = sp.nat(10)
     voteDelayBlocks = sp.nat(1)
@@ -893,6 +1000,7 @@ if __name__ == "__main__":
   def test():
     scenario = sp.test_scenario()
     
+    alice = sp.test_account("Alice")
     # Given some governance parameters
     escrowAmount = sp.nat(10)
     voteDelayBlocks = sp.nat(1)
@@ -930,7 +1038,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = sp.nat(0),
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = alice.address,
       escrowAmount = escrowAmount,
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -946,7 +1054,7 @@ if __name__ == "__main__":
       ),
       endBlock = sp.nat(10),
       cancelBlock = sp.nat(20),
-      author = Addresses.ALICE_ADDRESS
+      author = alice.address
     )
 
     # AND a dao contract with the parameters above.
@@ -968,6 +1076,7 @@ if __name__ == "__main__":
   def test():
     scenario = sp.test_scenario()
     
+    alice = sp.test_account("Alice")
     # Given some governance parameters
     escrowAmount = sp.nat(10)
     voteDelayBlocks = sp.nat(1)
@@ -1005,7 +1114,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = sp.nat(0),
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = alice.address,
       escrowAmount = escrowAmount,
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -1029,6 +1138,7 @@ if __name__ == "__main__":
   def test():
     scenario = sp.test_scenario()
     
+    alice = sp.test_account("Alice")
     # Given some governance parameters
     escrowAmount = sp.nat(10)
     voteDelayBlocks = sp.nat(1)
@@ -1068,7 +1178,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = totalVotes,
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = alice.address,
       escrowAmount = escrowAmount,
       quorum = quorum,
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -1095,6 +1205,7 @@ if __name__ == "__main__":
   def test():
     scenario = sp.test_scenario()
     
+    alice = sp.test_account("Alice")
     # Given some governance parameters
     escrowAmount = sp.nat(10)
     voteDelayBlocks = sp.nat(1)
@@ -1134,7 +1245,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = totalVotes,
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = alice.address,
       escrowAmount = escrowAmount,
       quorum = quorum,
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -1161,6 +1272,7 @@ if __name__ == "__main__":
   def test():
     scenario = sp.test_scenario()
     
+    alice = sp.test_account("Alice")
     # Given some governance parameters with a conservative upper cap
     escrowAmount = sp.nat(10)
     voteDelayBlocks = sp.nat(1)
@@ -1201,7 +1313,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = totalVotes,
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = alice.address,
       escrowAmount = escrowAmount,
       quorum = quorum,
       quorumCap = quorumCap,
@@ -1229,6 +1341,7 @@ if __name__ == "__main__":
   def test():
     scenario = sp.test_scenario()
     
+    alice = sp.test_account("Alice")
     # Given some governance parameters with a conservative lower cap
     escrowAmount = sp.nat(10)
     voteDelayBlocks = sp.nat(1)
@@ -1269,7 +1382,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = totalVotes,
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = alice.address,
       escrowAmount = escrowAmount,
       quorum = quorum,
       quorumCap = quorumCap
@@ -1297,6 +1410,9 @@ if __name__ == "__main__":
   def test():
     scenario = sp.test_scenario()
     
+    admin = sp.test_account("Administrator")
+    alice = sp.test_account("Alice")
+    bob   = sp.test_account("Robert")
     # Given some governance parameters 
     escrowAmount = sp.nat(10)
     voteDelayBlocks = sp.nat(1)
@@ -1338,17 +1454,26 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = totalVotes,
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = alice.address,
       escrowAmount = escrowAmount,
       quorum = sp.nat(100),
       quorumCap = quorumCap
     )
 
     # AND a token contract.
-    token = Token.FA12(
-      admin = Addresses.TOKEN_ADMIN_ADDRESS,
-    )
-    scenario += token
+    test_sdao = FA2_test.FA2(config = FA2_test.FA2_config(single_asset = True),
+          metadata = sp.utils.metadata_of_url("https://example.com"),
+          admin = admin.address)
+    scenario += test_sdao
+
+    scenario.h2("Initial Minting")
+
+    scenario.p("The administrator mints 100")
+
+    tok0_md = FA2_test.FA2.make_metadata(
+      name = "test sdao",
+      decimals = 0,
+      symbol= "TK0" )
 
     # AND a dao contract with the parameters above.
     quorum = 65
@@ -1356,19 +1481,14 @@ if __name__ == "__main__":
       governanceParameters = governanceParameters,
       poll = sp.some(poll),
       quorum = quorum,
-      tokenContractAddress = token.address,
+      tokenContractAddress = test_sdao.address,
     )
     scenario += dao
 
-    # AND the dao has tokens escrowed
-    scenario += token.mint(
-      sp.record(
-        address = dao.address,
-        value = escrowAmount
-      )
-    ).run(
-      sender = Addresses.TOKEN_ADMIN_ADDRESS
-    )
+    scenario += test_sdao.mint(address = dao.address,
+                      amount = escrowAmount,
+                      metadata = tok0_md,
+                      token_id = 0).run(sender = admin)
 
     # WHEN end voting is called
     scenario += dao.endVoting(sp.unit).run(
@@ -1376,13 +1496,16 @@ if __name__ == "__main__":
     )    
 
     # THEN alice receives the escrow.
-    scenario.verify(token.data.balances[Addresses.ALICE_ADDRESS] == escrowAmount)
-    scenario.verify(token.data.balances[dao.address] == 0)
+    scenario.verify(test_sdao.data.ledger[test_sdao.ledger_key.make(alice.address, 0)].balance == escrowAmount)
+    scenario.verify(test_sdao.data.ledger[test_sdao.ledger_key.make(dao.address, 0)].balance == 0)
     
   @sp.add_test(name="endVoting - gives escrow to community fund on failure")
   def test():
     scenario = sp.test_scenario()
     
+    admin = sp.test_account("Administrator")
+    alice = sp.test_account("Alice")
+    bob   = sp.test_account("Robert")
     # Given some governance parameters 
     escrowAmount = sp.nat(10)
     voteDelayBlocks = sp.nat(1)
@@ -1424,17 +1547,26 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = totalVotes,
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = alice.address,
       escrowAmount = escrowAmount,
       quorum = sp.nat(100),
       quorumCap = quorumCap
     )
 
     # AND a token contract.
-    token = Token.FA12(
-      admin = Addresses.TOKEN_ADMIN_ADDRESS,
-    )
-    scenario += token
+    test_sdao = FA2_test.FA2(config = FA2_test.FA2_config(single_asset = True),
+          metadata = sp.utils.metadata_of_url("https://example.com"),
+          admin = admin.address)
+    scenario += test_sdao
+
+    scenario.h2("Initial Minting")
+
+    scenario.p("The administrator mints 100")
+
+    tok0_md = FA2_test.FA2.make_metadata(
+      name = "test sdao",
+      decimals = 0,
+      symbol= "TK0" )
 
     # AND a dao contract with the parameters above.
     quorum = 65
@@ -1443,19 +1575,14 @@ if __name__ == "__main__":
       governanceParameters = governanceParameters,
       poll = sp.some(poll),
       quorum = quorum,
-      tokenContractAddress = token.address,
+      tokenContractAddress = test_sdao.address,
     )
     scenario += dao
 
-    # AND the dao has tokens escrowed
-    scenario += token.mint(
-      sp.record(
-        address = dao.address,
-        value = escrowAmount
-      )
-    ).run(
-      sender = Addresses.TOKEN_ADMIN_ADDRESS
-    )
+    scenario += test_sdao.mint(address = dao.address,
+                      amount = escrowAmount,
+                      metadata = tok0_md,
+                      token_id = 0).run(sender = admin)
 
     # WHEN end voting is called
     scenario += dao.endVoting(sp.unit).run(
@@ -1463,8 +1590,8 @@ if __name__ == "__main__":
     )    
 
     # THEN the community fund receives the escrow.
-    scenario.verify(token.data.balances[Addresses.COMMUNITY_FUND_ADDRESS] == escrowAmount)
-    scenario.verify(token.data.balances[dao.address] == 0)
+    scenario.verify(test_sdao.data.ledger[test_sdao.ledger_key.make(Addresses.COMMUNITY_FUND_ADDRESS, 0)].balance == escrowAmount)
+    scenario.verify(test_sdao.data.ledger[test_sdao.ledger_key.make(dao.address, 0)].balance == 0)
 
   @sp.add_test(name="endVoting - removes poll if quorum and super majority not met")
   def test():
@@ -1513,7 +1640,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = totalVotes,
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = escrowAmount,
       quorum = sp.nat(100),
       quorumCap = quorumCap
@@ -1588,7 +1715,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = totalVotes,
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = escrowAmount,
       quorum = sp.nat(100),
       quorumCap = quorumCap
@@ -1663,7 +1790,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = totalVotes,
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = escrowAmount,
       quorum = sp.nat(100),
       quorumCap = quorumCap
@@ -1739,7 +1866,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = totalVotes,
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = escrowAmount,
       quorum = sp.nat(100),
       quorumCap = quorumCap
@@ -1793,7 +1920,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = sp.nat(0),
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = sp.nat(50),
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -1865,7 +1992,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = sp.nat(0),
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = sp.nat(50),
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -1881,6 +2008,7 @@ if __name__ == "__main__":
       poll = sp.some(poll),
       state = STATE_MACHINE_IDLE,
       tokenContractAddress = token.address,
+      escrowContractAddress = token.address,
       votingState = sp.none
     )
     scenario += dao
@@ -1928,7 +2056,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = sp.nat(0),
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = sp.nat(50),
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -1939,6 +2067,7 @@ if __name__ == "__main__":
       poll = sp.some(poll),
       state = STATE_MACHINE_IDLE,
       tokenContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
+      escrowContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
       votingState = sp.none
     )
     scenario += dao
@@ -1975,7 +2104,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = sp.nat(0),
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = sp.nat(50),
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -1991,6 +2120,7 @@ if __name__ == "__main__":
       poll = sp.some(poll),
       state = STATE_MACHINE_WAITING_FOR_BALANCE,
       tokenContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
+      escrowContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
       votingState = sp.some(votingState)
     )
     scenario += dao
@@ -2028,7 +2158,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = sp.nat(0),
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = sp.nat(50),
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -2045,6 +2175,7 @@ if __name__ == "__main__":
       poll = sp.some(poll),
       state = STATE_MACHINE_WAITING_FOR_BALANCE,
       tokenContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
+      escrowContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
       votingState = sp.some(votingState)
     )
     scenario += dao
@@ -2081,7 +2212,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = sp.nat(0),
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = sp.nat(50),
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -2098,6 +2229,7 @@ if __name__ == "__main__":
       poll = sp.some(poll),
       state = STATE_MACHINE_WAITING_FOR_BALANCE,
       tokenContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
+      escrowContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
       votingState = sp.some(votingState)
     )
     scenario += dao
@@ -2142,7 +2274,7 @@ if __name__ == "__main__":
           )
         }
       ),
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = sp.nat(50),
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -2159,6 +2291,7 @@ if __name__ == "__main__":
       poll = sp.some(poll),
       state = STATE_MACHINE_WAITING_FOR_BALANCE,
       tokenContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
+      escrowContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
       votingState = sp.some(votingState)
     )
     scenario += dao
@@ -2196,7 +2329,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = sp.nat(0),
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = sp.nat(50),
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -2213,6 +2346,7 @@ if __name__ == "__main__":
       poll = sp.some(poll),
       state = STATE_MACHINE_WAITING_FOR_BALANCE,
       tokenContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
+      escrowContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
       votingState = sp.some(votingState)
     )
     scenario += dao
@@ -2250,7 +2384,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = sp.nat(0),
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = sp.nat(50),
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -2268,6 +2402,7 @@ if __name__ == "__main__":
       poll = sp.some(poll),
       state = STATE_MACHINE_WAITING_FOR_BALANCE,
       tokenContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
+      escrowContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
       votingState = sp.some(votingState)
     )
     scenario += dao
@@ -2321,7 +2456,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = sp.nat(0),
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = sp.nat(50),
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -2339,6 +2474,7 @@ if __name__ == "__main__":
       poll = sp.some(poll),
       state = STATE_MACHINE_WAITING_FOR_BALANCE,
       tokenContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
+      escrowContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
       votingState = sp.some(votingState)
     )
     scenario += dao
@@ -2392,7 +2528,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = sp.nat(0),
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = sp.nat(50),
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(1), upper = sp.nat(99))
@@ -2410,6 +2546,7 @@ if __name__ == "__main__":
       poll = sp.some(poll),
       state = STATE_MACHINE_WAITING_FOR_BALANCE,
       tokenContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
+      escrowContractAddress = Addresses.TOKEN_CONTRACT_ADDRESS,
       votingState = sp.some(votingState)
     )
     scenario += dao
@@ -2480,7 +2617,7 @@ if __name__ == "__main__":
       ),
       endBlock = endBlock,
       cancelBlock = cancelBlock,
-      author = Addresses.ALICE_ADDRESS
+      author = Addresses.TOKEN_CONTRACT_ADDRESS
     )
 
     # AND a dao contract with the item.
@@ -2493,7 +2630,7 @@ if __name__ == "__main__":
     # THEN the call fails.
     scenario += dao.executeTimelock(sp.unit).run(
       level = sp.as_nat(endBlock - 1),
-      sender = Addresses.ALICE_ADDRESS,
+      sender = Addresses.TOKEN_CONTRACT_ADDRESS,
       valid = False
     )
 
@@ -2514,7 +2651,7 @@ if __name__ == "__main__":
       ),
       endBlock = endBlock,
       cancelBlock = cancelBlock,
-      author = Addresses.ALICE_ADDRESS
+      author = Addresses.TOKEN_CONTRACT_ADDRESS
     )
 
     # AND a dao contract with the item.
@@ -2560,7 +2697,7 @@ if __name__ == "__main__":
       ),
       endBlock = endBlock,
       cancelBlock = cancelBlock,
-      author = Addresses.ALICE_ADDRESS
+      author = Addresses.TOKEN_CONTRACT_ADDRESS
     )
 
     poll = sp.record(
@@ -2578,7 +2715,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = sp.nat(100),
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = sp.nat(2),
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(0), upper = sp.nat(1000))
@@ -2607,7 +2744,7 @@ if __name__ == "__main__":
     notAuthor = Addresses.NULL_ADDRESS
     scenario += dao.executeTimelock(sp.unit).run(
       level = endBlock + 1,
-      sender = Addresses.ALICE_ADDRESS,
+      sender = Addresses.TOKEN_CONTRACT_ADDRESS,
     )
 
     # THEN the proposal executed
@@ -2656,7 +2793,7 @@ if __name__ == "__main__":
       ),
       endBlock = endBlock,
       cancelBlock = cancelBlock,
-      author = Addresses.ALICE_ADDRESS
+      author = Addresses.TOKEN_CONTRACT_ADDRESS
     )
 
     # AND a dao contract with the item.
@@ -2690,7 +2827,7 @@ if __name__ == "__main__":
       ),
       endBlock = endBlock,
       cancelBlock = cancelBlock,
-      author = Addresses.ALICE_ADDRESS
+      author = Addresses.TOKEN_CONTRACT_ADDRESS
     )
 
     poll = sp.record(
@@ -2708,7 +2845,7 @@ if __name__ == "__main__":
       abstainVotes = sp.nat(0),
       totalVotes = sp.nat(100),
       voters = {},
-      author = Addresses.ALICE_ADDRESS,
+      author = Addresses.TOKEN_CONTRACT_ADDRESS,
       escrowAmount = sp.nat(2),
       quorum = sp.nat(100),
       quorumCap = sp.record(lower = sp.nat(0), upper = sp.nat(1000))

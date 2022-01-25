@@ -9,8 +9,8 @@
 
 import smartpy as sp
 
-Addresses = sp.import_script_from_url("file:test-helpers/addresses.py")
-Errors = sp.import_script_from_url("file:common/errors.py")
+Addresses = sp.io.import_script_from_url("file:test-helpers/addresses.py")
+Errors = sp.io.import_script_from_url("file:common/errors.py")
 
 # CHANGED: Compress the contract into a single entity, rather than using inheritance.
 class FA12(sp.Contract):
@@ -23,10 +23,10 @@ class FA12(sp.Contract):
         token_id = sp.nat(0)
         kol_metadata = sp.map(
             l = {
-                "name": sp.bytes_of_string('Kolibri DAO Token'),
-                "decimals": sp.bytes('0x3138'), # 18
-                "symbol": sp.bytes_of_string('kDAO'),
-                "icon": sp.bytes_of_string('https://kolibri-data.s3.amazonaws.com/kdao-logo.png'),
+                "name": sp.utils.bytes_of_string('Kolibri DAO Token'),
+                "decimals": sp.utils.bytes_of_string('0x3138'), # 18
+                "symbol": sp.utils.bytes_of_string('kDAO'),
+                "icon": sp.utils.bytes_of_string('https://kolibri-data.s3.amazonaws.com/kdao-logo.png'),
             },
             tkey = sp.TString,
             tvalue = sp.TBytes
@@ -39,7 +39,7 @@ class FA12(sp.Contract):
           tvalue = sp.TRecord(token_id = sp.TNat, token_info = sp.TMap(sp.TString, sp.TBytes))
         )
         
-        metadata_data = sp.bytes_of_string('{ "name": "kDAO Token", "description": "The FA1.2 Governance Token For Kolibri", "authors": ["Hover Labs <hello@hover.engineering>"], "homepage":  "https://kolibri.finance", "interfaces": [ "TZIP-007-2021-01-29"] }')
+        metadata_data = sp.utils.bytes_of_string('{ "name": "kDAO Token", "description": "The FA1.2 Governance Token For Kolibri", "authors": ["Hover Labs <hello@hover.engineering>"], "homepage":  "https://kolibri.finance", "interfaces": [ "TZIP-007-2021-01-29"] }')
 
         metadata = sp.big_map(
             l = {
@@ -124,7 +124,7 @@ class FA12(sp.Contract):
                     self.data.numCheckpoints[params.checkpointedAddress] = params.numCheckpoints + 1
       
     # CHANGED: Add view to get balance from checkpoints
-    @sp.view(sp.TRecord(result = sp.TNat, address = sp.TAddress, level = sp.TNat))
+    @sp.utils.view(sp.TRecord(result = sp.TNat, address = sp.TAddress, level = sp.TNat))
     def getPriorBalance(self, params):
         sp.set_type(params, sp.TRecord(
             address = sp.TAddress,
@@ -245,21 +245,21 @@ class FA12(sp.Contract):
             self.data.balances[address] = 0
             self.data.approvals[address] = {}
 
-    @sp.view(sp.TNat)
+    @sp.utils.view(sp.TNat)
     def getBalance(self, params):
         # CHANGED: Add address if needed.
         self.addAddressIfNecessary(params)
 
         sp.result(self.data.balances[params])
 
-    @sp.view(sp.TNat)
+    @sp.utils.view(sp.TNat)
     def getAllowance(self, params):
         # CHANGED: Add address if needed.
         self.addAddressIfNecessary(params.owner)
 
         sp.result(self.data.approvals[params.owner].get(params.spender, sp.nat(0)))
 
-    @sp.view(sp.TNat)
+    @sp.utils.view(sp.TNat)
     def getTotalSupply(self, params):
         sp.set_type(params, sp.TUnit)
         sp.result(self.data.totalSupply)
@@ -304,7 +304,7 @@ class FA12(sp.Contract):
         sp.verify(self.is_administrator(sp.sender), Errors.ERROR_NOT_ADMINISTRATOR)
         self.data.administrator = params
 
-    @sp.view(sp.TOption(sp.TAddress))
+    @sp.utils.view(sp.TOption(sp.TAddress))
     def getAdministrator(self, params):
         sp.set_type(params, sp.TUnit)
         sp.result(self.data.administrator)

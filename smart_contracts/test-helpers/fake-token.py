@@ -9,7 +9,7 @@ class FakeTokenContract(sp.Contract):
   def default(self, params):
     pass
 
-  @sp.view(sp.TRecord(result = sp.TNat, address = sp.TAddress, level = sp.TNat))
+  @sp.utils.view(sp.TRecord(result = sp.TNat, address = sp.TAddress, level = sp.TNat))
   def getPriorBalance(self, params):
     sp.set_type(params, sp.TRecord(
       address = sp.TAddress,

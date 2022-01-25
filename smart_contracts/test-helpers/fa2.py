@@ -569,9 +569,9 @@ class FA2_token_metadata(FA2_core):
         "Helper function to build metadata JSON bytes values."
         return (sp.map(l = {
             # Remember that michelson wants map already in ordered
-            "decimals" : sp.bytes_of_string("%d" % decimals),
-            "name" : sp.bytes_of_string(name),
-            "symbol" : sp.bytes_of_string(symbol)
+            "decimals" : sp.utils.bytes_of_string("%d" % decimals),
+            "name" : sp.utils.bytes_of_string(name),
+            "symbol" : sp.utils.bytes_of_string(symbol)
         }))
 
 

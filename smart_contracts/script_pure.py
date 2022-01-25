@@ -593,4 +593,3 @@ if __name__ == "__main__":
     )
 
   sp.add_compilation_target("community-fund", CommunityFund())
-

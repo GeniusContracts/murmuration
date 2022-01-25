@@ -11,6 +11,9 @@ TOKEN_RECIPIENT = sp.address("tz1c461F8GirBvq5DpFftPoPyCcPR7HQM6gm")
 # The address which acts as the token contract.
 TOKEN_CONTRACT_ADDRESS = sp.address("tz1P2Po7YM526ughEsRbY4oR9zaUPDZjxFrb")
 
+# The address which acts as the token contract.
+ESCROW_CONTRACT_ADDRESS = sp.address("tz1P2Po7YM526ughEsRbY4oR9zaUPDZjxFrbeeeeeeeeeeeeee")
+
 # The address wich acts as a Community Fund
 COMMUNITY_FUND_ADDRESS = sp.address("tz1UUgPwikRHW1mEyVZfGYy6QaxrY6Y7WaG5")
 
